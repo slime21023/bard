@@ -11,7 +11,7 @@
 - **簡潔的 API**：易於整合到任何 ASGI 應用程式
 - **無外部依賴**：僅依賴 Python 標準庫和 Cython
 
-## 安裝
+## 安裝 (TODO)
 
 ### 從 PyPI 安裝
 
@@ -114,100 +114,12 @@ async def app(scope, receive, send):
         await not_found_handler(scope, receive, send)
 ```
 
-### 與 Starlette/FastAPI 整合
-
-Bard 可以輕鬆與 Starlette 或 FastAPI 整合：
-
-```python
-from starlette.applications import Starlette
-from starlette.responses import PlainTextResponse
-from starlette.routing import Route
-from bard import Router
-
-# 定義處理函數
-async def homepage(request):
-    return PlainTextResponse("Homepage")
-
-async def user_detail(request):
-    user_id = request.path_params["user_id"]
-    return PlainTextResponse(f"User: {user_id}")
-
-# 建立自訂中間件來使用 Bard 路由器
-router = Router()
-router.add_route("/", homepage)
-router.add_route("/users/{user_id}", user_detail)
-
-# 定義 Starlette 中間件
-class BardRoutingMiddleware:
-    def __init__(self, app):
-        self.app = app
-        
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            path = scope["path"]
-            handler, params = router.find_route(path)
-            
-            if handler:
-                # 更新路徑參數
-                scope["path_params"] = params
-                # 呼叫處理函數
-                response = await handler({"scope": scope, "receive": receive})
-                await response(scope, receive, send)
-                return
-                
-        # 繼續正常的 Starlette 處理流程
-        await self.app(scope, receive, send)
-
-# 創建 Starlette 應用
-app = Starlette()
-app.add_middleware(BardRoutingMiddleware)
-```
-
 ### 列出所有註冊路由
 
 ```python
 # 遍歷並打印所有註冊路由
 for path, handler in router.iter_routes():
     print(f"路由: {path}")
-```
-
-## 效能基準
-
-Bard 在路由匹配速度方面表現出色：
-
-| 路由器            | 靜態路由 (μs) | 參數路由 (μs) | 記憶體用量 (MB) |
-|------------------|-------------|-------------|--------------|
-| Bard             | 1.2         | 1.5         | 3.2          |
-| Starlette Router | 2.5         | 3.8         | 5.6          |
-| FastAPI Router   | 3.1         | 4.2         | 7.1          |
-
-*基準測試在 3.9GHz Intel i9, 32GB RAM, Python 3.10 環境下進行*
-
-## 開發
-
-克隆儲存庫：
-
-```bash
-git clone https://github.com/example/bard.git
-cd bard
-```
-
-安裝開發依賴：
-
-```bash
-uv pip install -e ".[dev]"
-```
-
-運行測試：
-
-```bash
-pytest
-```
-
-運行基準測試：
-
-```bash
-pytest tests/test_benchmark.py -v
 ```
 
 ## 專案狀態
