@@ -1,6 +1,6 @@
 # Bard
 
-Next-gen ASGI framework prototype focused on type-driven handlers, extractors, and startup-time compilation.
+Bard is a small ASGI framework focused on type-driven extractors and startup-time compilation.
 
 ## Quick Start
 
