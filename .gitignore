@@ -1,56 +1,12 @@
-# Python bytecode
+# Python-generated files
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Cython generated files
-*.c
-*.so
-*.pyd
-*.dll
-
-# Distribution / packaging
-dist/
+*.py[oc]
 build/
-*.egg-info/
-*.egg
+dist/
+wheels/
+*.egg-info
 
 # Virtual environments
-venv/
-env/
-ENV/
-.env/
-.venv/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Build output
-*.o
-*.obj
-*.a
-*.lib
-
-# Development environments
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-
-# Local development settings
-.env
-.env.local
-
-# Benchmark results
-benchmarks/results/
-
-# Documentation build
-docs/_build/
-docs/api/
-
-# Project specific
-.uv/
+.venv
+site
+site_build*

@@ -1,127 +1,202 @@
-# Bard ASGI Trie Router
+# Bard
 
-高效能的 ASGI 路由器，使用 Cython 實現，基於 Trie 樹結構設計，提供快速的路徑匹配和參數提取功能。
+Next-gen ASGI framework prototype focused on type-driven handlers, extractors, and startup-time compilation.
 
-## 功能特點
+## Quick Start
 
-- **高效能**：利用 Cython 的靜態型別和 C 級別效能
-- **支援靜態和參數化路徑**：如 `/users` 和 `/users/{id}`
-- **路徑參數提取**：自動從匹配的路由中提取參數值
-- **路由優先級**：靜態路徑優先於參數化路徑
-- **簡潔的 API**：易於整合到任何 ASGI 應用程式
-- **無外部依賴**：僅依賴 Python 標準庫和 Cython
-
-## 安裝 (TODO)
-
-### 從 PyPI 安裝
-
-使用 uv 安裝：
+Install:
 
 ```bash
-uv pip install bard
-```
-
-或使用 pip 安裝：
-
-```bash
-pip install bard
-```
-
-### 從源碼安裝
-
-```bash
-git clone https://github.com/example/bard.git
-cd bard
 pip install -e .
 ```
 
-## 快速入門
+Run the demo app:
 
-### 基本用法
+```bash
+python main.py
+```
+
+Try it:
+
+```bash
+curl http://127.0.0.1:8000/
+curl -X POST http://127.0.0.1:8000/echo -H "content-type: application/json" -d "{\"hello\":\"bard\"}"
+```
+
+## Extractors
 
 ```python
-from bard import Router
+from typing import Annotated
 
-# 建立路由器
+from bard import Header, Json, Query, Router, State
+
+
+async def search(
+    q: Annotated[str, Query],
+    agent: Annotated[str, Header("user-agent")],
+    db: Annotated[str, State("db")],
+):
+    return {"q": q, "agent": agent, "db": db}
+```
+
+## Dependencies (DI)
+
+Register a type-based provider and use the type directly in your handler signature.
+
+```python
+from contextlib import contextmanager
+from typing import Annotated
+
+from bard import BardApp, Depends, Router
+
+
+class Database:
+    def query(self) -> str:
+        return "ok"
+
+    def close(self) -> None:
+        pass
+
+
+@contextmanager
+def provide_db():
+    db = Database()
+    yield db
+    db.close()  # optional: if you have it
+
+
+async def read(db: Database):
+    return {"status": db.query()}
+
+
+async def override(db: Annotated[Database, Depends(provide_db)]):
+    return {"status": db.query()}
+
+
 router = Router()
-
-# 定義 ASGI 應用程式
-async def index(scope, receive, send):
-    await send({
-        'type': 'http.response.start',
-        'status': 200,
-        'headers': [(b'content-type', b'text/plain')]
-    })
-    await send({
-        'type': 'http.response.body',
-        'body': b'Index page'
-    })
-
-async def users_list(scope, receive, send):
-    await send({
-        'type': 'http.response.start',
-        'status': 200,
-        'headers': [(b'content-type', b'text/plain')]
-    })
-    await send({
-        'type': 'http.response.body',
-        'body': b'Users list'
-    })
-
-async def user_detail(scope, receive, send):
-    # 從路由參數中獲取用戶 ID
-    user_id = scope["route_params"]["user_id"]
-    await send({
-        'type': 'http.response.start',
-        'status': 200,
-        'headers': [(b'content-type', b'text/plain')]
-    })
-    await send({
-        'type': 'http.response.body',
-        'body': f'User detail: {user_id}'.encode()
-    })
-
-async def not_found_handler(scope, receive, send):
-    await send({
-        'type': 'http.response.start',
-        'status': 404,
-        'headers': [(b'content-type', b'text/plain')]
-    })
-    await send({
-        'type': 'http.response.body',
-        'body': b'Not found'
-    })
-
-# 註冊路由
-router.add_route("/", index)
-router.add_route("/users", users_list)
-router.add_route("/users/{user_id}", user_detail)
-
-# 使用路由器
-async def app(scope, receive, send):
-    if scope["type"] != "http":  # 僅處理 HTTP 請求
-        return
-        
-    path = scope["path"]
-    handler, params = router.find_route(path)
-    
-    if handler:
-        # 將參數添加到 scope 中
-        scope["route_params"] = params
-        await handler(scope, receive, send)
-    else:
-        # 處理 404
-        await not_found_handler(scope, receive, send)
+router.provide(Database, provide_db)
+router.get("/read", read)
+router.get("/override", override)
+app = BardApp(router)
 ```
 
-### 列出所有註冊路由
+Providers may return a plain object, a `contextmanager` / `asynccontextmanager`, or an object
+with `close()` / `aclose()`. Bard will clean up request-scoped dependencies automatically.
+
+## Middleware
+
+Register app-level HTTP middleware:
 
 ```python
-# 遍歷並打印所有註冊路由
-for path, handler in router.iter_routes():
-    print(f"路由: {path}")
+from bard import BardApp, Request, Router
+
+
+async def add_header(request: Request, call_next):
+    result = await call_next()
+    return result, 200, {"x-middleware": "1"}
+
+
+router = Router()
+app = BardApp(router)
+app.add_middleware(add_header)
 ```
 
-## 專案狀態
+## WebSocket
 
-此專案目前處於 Beta 階段，核心功能已穩定但 API 可能會有小的變動。
+```python
+from bard import BardApp, Router, WebSocket
+
+
+async def ws_handler(ws: WebSocket):
+    await ws.send_text("hello")
+    await ws.close()
+
+
+router = Router()
+router.websocket("/ws", ws_handler)
+app = BardApp(router)
+```
+
+## Streaming
+
+```python
+from bard import BardApp, Router, StreamingResponse
+
+
+async def gen():
+    yield b"a"
+    yield b"b"
+
+
+async def stream():
+    return StreamingResponse(gen())
+
+
+router = Router()
+router.get("/stream", stream)
+app = BardApp(router)
+```
+
+## Forms & Files
+
+Use `Form` for form fields and `File` for uploads. URL-encoded and multipart
+requests are supported.
+
+```python
+from typing import Annotated
+
+from bard import File, Form, FormData, Router, UploadFile
+
+
+async def submit(name: Annotated[str, Form]):
+    return {"name": name}
+
+
+async def upload(file: Annotated[UploadFile, File("file")]):
+    return {"filename": file.filename, "size": len(file.content)}
+
+
+async def capture(form: Annotated[FormData, Form]):
+    return {"fields": form.fields, "files": list(form.files)}
+
+
+router = Router()
+router.post("/submit", submit)
+router.post("/upload", upload)
+router.post("/capture", capture)
+```
+
+Try it:
+
+```bash
+curl -X POST http://127.0.0.1:8000/submit \
+  -H "content-type: application/x-www-form-urlencoded" \
+  -d "name=bard"
+
+curl -X POST http://127.0.0.1:8000/upload \
+  -F "file=@README.md"
+```
+
+## Testing
+
+Use the in-process `TestClient` without running a server. It triggers ASGI lifespan startup/shutdown by default.
+
+```python
+from typing import Annotated
+
+from bard import BardApp, Json, Router, TestClient
+
+
+async def echo(payload: Annotated[dict, Json]):
+    return {"received": payload}
+
+
+router = Router()
+router.post("/echo", echo)
+app = BardApp(router)
+
+with TestClient(app) as client:
+    resp = client.post("/echo", json={"hello": "bard"})
+    assert resp.status == 200
+    assert resp.json()["received"]["hello"] == "bard"
+```

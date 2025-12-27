@@ -1,501 +1,243 @@
-# Bard - Cython ASGI Trie Router 軟體設計文件
+﻿# Bard 技術文件
 
-**版本**: 0.0.1  
-**日期**: 2025年5月9日  
-**狀態**: 設計草案
+**Bard** 是一個基於 Python 3.10+ 的下一代 ASGI 底層開發框架。
 
-## 目錄
-- [1. 導論](#1-導論)
-- [2. 系統概觀](#2-系統概觀)
-- [3. 架構設計](#3-架構設計)
-- [4. 詳細設計](#4-詳細設計)
-- [5. 實作考量](#5-實作考量)
-- [6. 部署與編譯](#6-部署與編譯)
-- [7. 測試策略](#7-測試策略)
-- [8. 附錄](#8-附錄)
+它的設計靈感源自 Rust 的 **Axum**，旨在透過 **Type-Driven（類型驅動）** 開發模式、**Radix Tree 路由** 以及 **啟動時編譯（Startup-time Compilation）** 技術，提供比 Starlette 更優異的開發體驗與執行效能。
 
 ---
 
-## 1. 導論
+## 核心特性 (Key Features)
 
-### 1.1 目的
-本文件詳細描述一個完全以 Cython 實現的高效能 Trie Tree 路由器，專為 ASGI (Asynchronous Server Gateway Interface) 應用程式設計。此路由器旨在提供快速的路徑匹配功能，並將請求分派給相應的 ASGI 應用程式。
-
-### 1.2 範圍
-本設計涵蓋以下功能：
-* 基於 Trie Tree 的路徑註冊與查找
-* 支援靜態路徑段和參數化路徑段 (例如 `/users/{id}`)
-* 從請求路徑中提取參數
-* 提供介面來遍歷所有已註冊的路由及其對應的 ASGI 應用程式
-* 當找不到匹配路徑時，返回明確的未找到指示
-* 設計上不直接處理多執行緒同步問題，假設在單一事件迴圈或由外部機制處理同步
-
-### 1.3 定義、首字母縮寫詞和縮略語
-| 術語 | 定義 |
-|------|------|
-| **ASGI** | Asynchronous Server Gateway Interface，Python 非同步 Web 應用程式的標準介面 |
-| **Trie Tree** | 前綴樹或字典樹，一種用於高效字串檢索的樹狀資料結構 |
-| **SDD** | Software Design Document (軟體設計文件) |
-| **Cython** | 一種程式語言，允許為 Python 編寫 C 擴展，旨在提高效能 |
-| **ASGI App** | 符合 ASGI 規範的可呼叫物件，用於處理 HTTP 請求 |
-| **Route Parameters** | 從路徑中動態提取的值，例如 `/users/123` 中的 `123` |
+- **Axum-like 設計哲學**：告別手動解析 Request。透過 Type Hints 宣告需求，框架自動注入。
+- **O(K) 高效路由**：採用 **Radix Tree** 演算法取代傳統的線性 Regex 掃描，路由匹配速度與路由數量無關。
+- **極速 JSON 處理**：核心整合 **msgspec**，提供比 Pydantic 快 10-50 倍的序列化與驗證效能。
+- **啟動時編譯**：在伺服器啟動瞬間分析 Handler 依賴，消除 Runtime 的反射（Reflection）開銷。
+- **ASGI 原生**：完全兼容 ASGI 3.0 標準，可運行於 Uvicorn, Hypercorn 等伺服器。
 
 ---
 
-## 2. 系統概觀
+## 1. 安裝 (Installation)
 
-### 2.1 產品視角
-Cython ASGI Trie Router 是一個核心路由組件，可被整合到 ASGI Web 框架或作為 ASGI 中間件的一部分使用。它接收請求路徑，高效地查找已註冊的路由，並確定應處理該請求的 ASGI 應用程式及提取的路徑參數。
+Bard 是一個輕量級框架。
 
-```
-┌──────────────┐     ┌─────────────────────┐     ┌───────────────┐
-│ HTTP Request │────▶│ Cython ASGI Router  │────▶│ ASGI Handler  │
-└──────────────┘     │  1. 路徑匹配        │     └───────────────┘
-                     │  2. 參數提取        │
-                     │  3. 應用程式選擇    │
-                     └─────────────────────┘
+```bash
+# 假設 Bard 已發布
+pip install bard-web uvicorn msgspec
 ```
 
-### 2.2 設計目標
-* **高效能**: 利用 Cython 的靜態型別和 C 級別的資料結構，最大限度地減少路徑查找的延遲
-* **功能完整性**: 支援常見的路由需求，包括靜態路徑、參數化路徑和參數提取
-* **易於整合**: 提供清晰的 Cython/Python API，方便 ASGI 框架或中間件使用
-* **可維護性**: 儘管使用 Cython，但仍力求程式碼結構清晰，易於理解和維護
+---
 
-### 2.3 使用場景
+## 2. 快速上手 (Quick Start)
 
-#### 2.3.1 基本路由註冊與查找
+建立一個 `main.py`：
+
 ```python
-# 建立路由器實例
+import uvicorn
+from bard import BardApp, Router, Json
+from typing import Annotated
+import msgspec
+
+# 1. 定義資料結構 (推薦使用 msgspec.Struct 以獲得極致效能)
+class CreateUser(msgspec.Struct):
+    username: str
+    email: str
+
+# 2. 定義 Handler
+# 使用 Annotated 宣告依賴，Bard 會自動提取並驗證
+async def create_user(payload: Annotated[CreateUser, Json]):
+    return {
+        "status": "success",
+        "user": payload.username,
+        "email": payload.email
+    }, 201
+
+async def root():
+    return "Hello from Bard!"
+
+# 3. 註冊路由
+router = Router()
+router.get("/", root)
+router.post("/users", create_user)
+
+# 4. 啟動應用
+app = BardApp(router)
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+```
+
+---
+
+## 3. 核心概念：提取器 (Extractors)
+
+Bard 的核心在於 **Extractors**。你不需要在函數內寫 `request.json()` 或 `request.query_params`。你只需要在參數簽名中「宣告」你需要什麼。
+
+### 內建提取器
+
+| 提取器 | 類型標註範例 | 功能說明 |
+| :--- | :--- | :--- |
+| **Json** | `Annotated[T, Json]` | 解析 Body。支援 `msgspec.Struct`, `dataclass`, `Pydantic`, `dict`。 |
+| **Path** | `Annotated[str, Path]` | 提取 URL 路徑參數 (如 `/users/{id}`)。 |
+| **Query** | `Annotated[str, Query]` | 提取 URL 查詢參數。 |
+| **Header** | `Annotated[str, Header]` | 提取 HTTP Header 值。 |
+| **State** | `Annotated[Any, State]` | 提取應用全域狀態 (如 DB 連線)。 |
+| **Request** | `req: Request` | (Escape Hatch) 獲取原始 ASGI Request 物件。 |
+
+### 複合使用範例
+
+```python
+async def search_users(
+    query: Annotated[str, Query],
+    version: Annotated[str, Header],
+    db: Annotated[Database, State]
+):
+    # 這裡的代碼完全與 HTTP 協議解耦
+    results = await db.search(query)
+    return {"version": version, "data": results}
+```
+
+---
+
+## 4. 路由系統 (Routing System)
+
+Bard 使用 **Radix Tree** 進行路由匹配，這意味著無論你有 10 個還是 10,000 個路由，匹配速度都是恆定的 **O(K)** (K 為 URL 長度)。
+
+相比之下，Starlette 使用線性掃描 (O(N))，路由越多越慢。
+
+### 定義路由
+
+```python
 router = Router()
 
-# 註冊路由
-router.add_route("/", index_app)
-router.add_route("/users", users_list_app)
-router.add_route("/users/{user_id}", user_detail_app)
+# 靜態路徑
+router.get("/health", health_check)
 
-# 查找路由
-app, params = router.find_route("/users/123")
-# 結果: app = user_detail_app, params = {"user_id": "123"}
+# 路徑參數 (使用 {name} 語法)
+router.get("/users/{user_id}", get_user)
+
+# 支援多種 HTTP 方法
+router.post("/items", create_item)
+router.put("/items/{id}", update_item)
+router.delete("/items/{id}", delete_item)
 ```
 
 ---
 
-## 3. 架構設計
+## 5. 資料驗證與效能 (Validation & Performance)
 
-### 3.1 組件概觀
-系統主要由以下 Cython 類別組成：
+Bard 預設整合 **msgspec**，這是目前 Python 生態中最快的 JSON 庫。
 
-```
-┌───────────────────────┐
-│ CythonASGITrieRouter  │
-├───────────────────────┤
-│ - root_node: _TrieNode│
-│ + add_route()         │
-│ + find_route()        │
-│ + iter_routes()       │
-└───────┬───────────────┘
-        │
-        │ 包含
-        ▼
-┌───────────────────────┐
-│ _TrieNode             │
-├───────────────────────┤
-│ - children: dict      │
-│ - asgi_app: _ASGIApp  │
-│ - is_path_end: bool   │
-│ - param_name: str     │
-└───────────────────────┘
-```
+### 推薦模式：msgspec.Struct
 
-### 3.2 資料結構設計
-
-#### 3.2.1 類型定義
-```cython
-# 類型別名
-ctypedef object _ASGIApp     # ASGI 應用程式 (Python callable)
-ctypedef dict _RouteParams   # 路由參數字典 {param_name: value}
-```
-
-#### 3.2.2 `_TrieNode` 類別
-`_TrieNode` 代表 Trie 樹中的一個節點，是路由器的基本構建塊。
-
-**屬性**:
-* `dict children`: 子節點字典，鍵為下一個路徑段或參數標記，值為 `_TrieNode` 實例
-* `_ASGIApp asgi_app`: 如果這是路徑終點，則存儲對應的 ASGI 應用程式
-* `bint is_path_end`: 標記該節點是否為一個完整註冊路徑的終點
-* `str param_name`: 如果此節點表示參數段，則存儲參數名稱
-
-**常數**:
-* `PARAM_KEY = "<param>"`: 用於在 `children` 字典中標識參數節點的特殊鍵
-
-**節點類型**:
-1. **靜態節點**: 對應固定路徑段，如 `/users` 中的 "users"
-2. **參數節點**: 對應動態路徑段，如 `/users/{id}` 中的 "{id}"
-3. **終點節點**: 標記一個完整路徑的結束，包含 ASGI 應用程式
-
-#### 3.2.3 Trie 樹結構示例
-以下 ASCII 圖表展示了註冊 `/users` 和 `/users/{id}` 後形成的 Trie 樹結構：
-
-```
-               ┌────────┐
-               │ root   │
-               └────┬───┘
-                    │
-                    ▼
-               ┌────────┐
-          ┌───▶│"users" │
-          │    └────┬───┘
-          │         │
-┌─────────┴────┐    ▼
-│ app: users_  │◀──┐    ┌────────────┐
-│ list_app     │   └───▶│ "<param>"  │
-└──────────────┘        │ name: "id" │
-                        └─────┬──────┘
-                              │
-                        ┌─────▼──────┐
-                        │ app: user_ │
-                        │ detail_app │
-                        └────────────┘
-```
-
-### 3.3 介面設計
-
-#### 3.3.1 `CythonASGITrieRouter` 公開 API
-
-```cython
-cdef class CythonASGITrieRouter:
-    # 註冊一個新的路由
-    cpdef void add_route(self, str path, _ASGIApp app_to_serve)
-    
-    # 根據路徑查找匹配的路由
-    cpdef tuple find_route(self, str path)
-    
-    # 遍歷所有已註冊的路由
-    def iter_routes(self)
-```
-
-#### 3.3.2 API 詳細說明
-
-**`add_route(path, app_to_serve)`**
-* **功能**: 註冊新的路由路徑及其處理應用程式
-* **參數**:
-  * `path (str)`: 路由路徑，例如 `/users/{id}`
-  * `app_to_serve (_ASGIApp)`: 處理此路徑的 ASGI 應用程式
-* **返回**: `void`
-* **可能的異常**:
-  * 當發生參數命名衝突時可能拋出 `ValueError`（目前設計中被註釋掉）
-
-**`find_route(path)`**
-* **功能**: 查找匹配給定路徑的路由
-* **參數**:
-  * `path (str)`: 請求路徑，例如 `/users/123`
-* **返回**: `tuple(_ASGIApp, _RouteParams)`
-  * 成功時: `(匹配的ASGI應用程式, 參數字典)`
-  * 失敗時: `(None, None)`
-
-**`iter_routes()`**
-* **功能**: 產生一個包含所有已註冊路由的迭代器
-* **返回**: 產生元組 `(路徑字串, ASGI應用程式)`
-
----
-
-## 4. 詳細設計
-
-### 4.1 `_TrieNode` 類別實作
-
-```cython
-cdef class _TrieNode:
-    # 類別常數
-    PARAM_KEY = "<param>"
-    
-    def __cinit__(self):
-        self.children = {}
-        self.asgi_app = None
-        self.is_path_end = False
-        self.param_name = None
-```
-
-### 4.2 `CythonASGITrieRouter` 類別實作
-
-#### 4.2.1 初始化
-
-```cython
-cdef class CythonASGITrieRouter:
-    def __cinit__(self):
-        self.root_node = _TrieNode()
-```
-
-#### 4.2.2 路徑正規化
-
-```cython
-cdef list _normalize_path(self, str path):
-    if not path:  # 處理空字串路徑
-        return []
-    if path == "/":  # 根路徑
-        return []
-    
-    # 去除開頭和結尾的斜線，然後分割
-    normalized = path.strip("/")
-    if not normalized:  # 路徑是類似 "//" 的情形
-        return []  # 視為根路徑
-    return normalized.split('/')
-```
-
-#### 4.2.3 新增路由
-
-```cython
-cpdef void add_route(self, str path, _ASGIApp app_to_serve):
-    cdef list segments = self._normalize_path(path)
-    cdef _TrieNode current_node = self.root_node
-    cdef str segment
-    cdef str param_name_extracted
-    cdef _TrieNode child_node  # 用於保存遍歷/創建過程中的下一個節點
-
-    for segment in segments:
-        # 處理參數段 (如 "{id}")
-        if segment.startswith('{') and segment.endswith('}') and len(segment) > 2:
-            param_name_extracted = segment[1:-1]
-            
-            # 檢查參數節點是否已存在
-            if _TrieNode.PARAM_KEY not in current_node.children:
-                child_node = _TrieNode()
-                child_node.param_name = param_name_extracted
-                current_node.children[_TrieNode.PARAM_KEY] = child_node
-            # 可選的參數命名衝突處理 (目前被註釋)
-            # 
-            # else:
-            #   如果參數節點已存在，確保參數名稱一致
-            #   或決定衝突解決策略 (例如: 錯誤、覆寫、允許多個)
-            #   在此設計中，我們假設該路徑層級的第一個註冊參數名稱有效
-            #   if current_node.children[_TrieNode.PARAM_KEY].param_name != param_name_extracted:
-            #       raise ValueError(f"Conflicting parameter names: {current_node.children[_TrieNode.PARAM_KEY].param_name} vs {param_name_extracted}")
-            
-            current_node = current_node.children[_TrieNode.PARAM_KEY]
-            
-            # 如果節點的參數名尚未設置，則設置它
-            if not current_node.param_name:
-                current_node.param_name = param_name_extracted
-        
-        # 處理靜態段 (如 "users")
-        else:
-            if segment not in current_node.children:
-                current_node.children[segment] = _TrieNode()
-            current_node = current_node.children[segment]
-    
-    # 標記路徑終點並關聯 ASGI 應用程式
-    current_node.is_path_end = True
-    current_node.asgi_app = app_to_serve
-```
-
-#### 4.2.4 查找路由
-
-```cython
-cpdef tuple find_route(self, str path):
-    cdef list segments = self._normalize_path(path)
-    cdef _RouteParams extracted_params = {}
-    cdef _TrieNode current_node = self.root_node
-    cdef str segment
-    cdef _TrieNode param_node_candidate  # 用於保存可能的參數節點
-
-    for segment in segments:
-        # 優先嘗試靜態匹配
-        if segment in current_node.children:
-            current_node = current_node.children[segment]
-        # 其次嘗試參數匹配
-        elif _TrieNode.PARAM_KEY in current_node.children:
-            param_node_candidate = current_node.children[_TrieNode.PARAM_KEY]
-            if param_node_candidate.param_name:  # 確保參數名已設置
-                extracted_params[param_node_candidate.param_name] = segment
-            else:
-                # 此情況理論上不應發生，如果 add_route 正確設置 param_name
-                return (None, None)  # 或拋出內部錯誤
-            current_node = param_node_candidate
-        else:  # 沒有匹配此段
-            return (None, None)
-    
-    # 檢查是否到達路徑終點
-    if current_node.is_path_end:
-        return (current_node.asgi_app, extracted_params)
-    else:  # 路徑是已註冊路由的前綴，但自身不是路由
-        return (None, None)
-```
-
-#### 4.2.5 遍歷所有路由
-
-```cython
-def iter_routes(self):
-    """遍歷所有已註冊的路由及其處理應用程式"""
-    cdef list routes_found = []
-    self._iter_routes_recursive(self.root_node, [], routes_found)
-    for route_path, app in routes_found:
-        yield (route_path, app)
-
-cdef _iter_routes_recursive(self, _TrieNode node, list current_path_parts, list routes_found):
-    # 如果節點是路徑終點，將其添加到結果中
-    if node.is_path_end:
-        # 將路徑部分合併為字串
-        path_str = "/" if not current_path_parts else "/" + "/".join(current_path_parts)
-        routes_found.append((path_str, node.asgi_app))
-    
-    # 遞迴處理所有子節點
-    for segment, child_node in node.children.items():
-        if segment == _TrieNode.PARAM_KEY:
-            # 參數節點，用花括號包裹參數名
-            param_segment = "{" + child_node.param_name + "}"
-            self._iter_routes_recursive(
-                child_node,
-                current_path_parts + [param_segment],
-                routes_found
-            )
-        else:
-            # 靜態節點
-            self._iter_routes_recursive(
-                child_node,
-                current_path_parts + [segment],
-                routes_found
-            )
-```
-
----
-
-## 5. 實作考量
-
-### 5.1 效能優化
-
-1. **靜態優先匹配**: 在路由查找中，優先嘗試靜態段匹配以避免不必要的參數處理。
-2. **路徑正規化快取**: 對於頻繁使用的路徑，可考慮快取正規化結果。
-3. **記憶體最佳化**: 使用 Cython 的靜態類型和 C 數據結構減少記憶體占用。
-
-### 5.2 可能的改進
-
-1. **通配符支援**: 增加 `*` 或 `**` 通配符支援，用於匹配多個路徑段。
-2. **正則表達式參數**: 為參數增加規則驗證，例如 `{id:[0-9]+}`。
-3. **多重路由衝突解決**: 提供更健全的策略處理同路徑不同參數名的情況。
-4. **並發安全**: 增加線程安全保證，以支援多線程環境。
-
-### 5.3 潛在限制
-
-1. **參數命名衝突**: 目前的設計在存在命名衝突時依賴首次註冊的名稱，可能導致混淆。
-2. **非並發安全**: 目前設計假設單一事件迴圈或外部同步機制。
-3. **路徑限制**: 不支援非路徑部分的匹配（如查詢參數、HTTP 方法）。
-
----
-
-## 6. 部署與編譯
-
-### 6.1 編譯指南
-
-#### 6.1.1 設置 Cython 環境
-
-```bash
-pip install cython
-```
-
-#### 6.1.2 `setup.py` 檔案
+這是 Bard 效能最強的模式。解析、驗證、物件建立一次完成。
 
 ```python
-from setuptools import setup, Extension
-from Cython.Build import cythonize
+import msgspec
 
-extensions = [
-    Extension(
-        "cython_asgi_router",
-        ["router.pyx"],
-        extra_compile_args=["-O3"]  # 最高級別優化
+class Item(msgspec.Struct):
+    name: str
+    price: float
+    tags: list[str] = []
+
+async def create_item(item: Annotated[Item, Json]):
+    # 如果 JSON 缺少 name 或 price 格式錯誤
+    # Bard 會直接回傳 422 Unprocessable Entity
+    # Handler 根本不會被執行
+    pass
+```
+
+### 相容模式：Pydantic & Dataclasses
+
+Bard 也完全支援 Pydantic 模型和標準 dataclasses，方便現有專案遷移。
+
+```python
+from pydantic import BaseModel
+
+class User(BaseModel):
+    id: int
+    name: str
+
+async def update_user(user: Annotated[User, Json]):
+    # 自動呼叫 User.model_validate_json()
+    pass
+```
+
+---
+
+## 6. 生命週期管理 (Lifespan)
+
+Bard 支援 ASGI Lifespan 協議，用於處理應用啟動與關閉時的資源管理（如資料庫連線）。
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    # --- 啟動 ---
+    print("Connecting to DB...")
+    app.state["db"] = await Database.connect()
+    
+    yield
+    
+    # --- 關閉 ---
+    print("Disconnecting...")
+    await app.state["db"].close()
+
+app = BardApp(router, lifespan=lifespan)
+```
+
+---
+
+## 7. 測試 (Testing)
+
+Bard 內建 `TestClient`，允許你在不啟動網路伺服器的情況下測試 API。
+
+```python
+from bard import TestClient
+
+def test_create_user():
+    client = TestClient(app)
+    
+    resp = client.request(
+        "POST", 
+        "/users", 
+        body=b'{"username": "test", "email": "a@b.com"}'
     )
-]
-
-setup(
-    name="cython_asgi_router",
-    ext_modules=cythonize(extensions),
-    zip_safe=False
-)
-```
-
-#### 6.1.3 編譯命令
-
-```bash
-python setup.py build_ext --inplace
-```
-
-### 6.2 使用範例
-
-```python
-from cython_asgi_router import CythonASGITrieRouter
-
-# 建立路由器
-router = CythonASGITrieRouter()
-
-# 定義 ASGI 應用程式
-async def index(scope, receive, send):
-    await send({
-        'type': 'http.response.start',
-        'status': 200,
-        'headers': [(b'content-type', b'text/plain')]
-    })
-    await send({
-        'type': 'http.response.body',
-        'body': b'Index page'
-    })
-
-# 註冊路由
-router.add_route("/", index)
-
-# 以中間件形式使用路由器
-async def router_middleware(scope, receive, send):
-    if scope["type"] != "http":
-        return
-        
-    path = scope["path"]
-    app, params = router.find_route(path)
     
-    if app:
-        # 將參數添加到 scope 中
-        scope["route_params"] = params
-        await app(scope, receive, send)
-    else:
-        # 處理 404
-        await send({
-            'type': 'http.response.start',
-            'status': 404
-        })
-        await send({
-            'type': 'http.response.body',
-            'body': b'Not Found'
-        })
+    assert resp.status == 201
+    assert resp.json()["status"] == "success"
 ```
 
 ---
 
-## 7. 測試策略
+## 8. 進階架構：啟動時編譯 (Startup Compilation)
 
-### 7.1 單元測試
+Bard 的高效能祕密在於 `CompiledHandler`。
 
-1. **路徑正規化測試**: 測試各種路徑輸入的正規化結果。
-2. **路由註冊測試**: 驗證路由正確註冊到 Trie 中。
-3. **路徑查找測試**: 確保能正確查找靜態和參數化路徑。
-4. **參數提取測試**: 驗證從路徑中正確提取參數。
-5. **邊界情況測試**: 測試空路徑、根路徑、重複斜線等特殊情況。
+1.  **分析階段**：當你呼叫 `BardApp(router)` 時，框架會遍歷所有 Handler。
+2.  **編譯階段**：框架解析每個參數的 `Annotated` 類型，並建立一個優化的執行計畫（Execution Plan）。
+3.  **執行階段**：當請求到達時，Bard 不需要再做任何反射（Reflection）或類型檢查，直接依照計畫執行提取器。
 
-### 7.2 效能測試
-
-1. **基準測試**: 與純 Python 實現和其他路由器比較。
-2. **壓力測試**: 在大量路由和高頻率查詢下的性能。
-3. **記憶體使用測試**: 監測不同數量路由下的記憶體佔用。
+這使得 Bard 的 Runtime overhead 降至最低，接近手寫原始 ASGI 函數的效能。
 
 ---
 
-## 8. 附錄
+## 9. 依賴注入與資源清理 (DI & Cleanup)
 
-### 8.1 參考資料
+除了 `Annotated[..., Extractor]`，Bard 也支援 **按參數型別注入（type-based providers）**：
 
-1. ASGI 規範: [ASGI Specification](https://asgi.readthedocs.io/en/latest/specs/index.html)
-2. Cython 文檔: [Cython Documentation](https://cython.readthedocs.io/)
-3. Trie 資料結構: [Wikipedia - Trie](https://en.wikipedia.org/wiki/Trie)
+- 透過 `router.provide(Type, provider)` 註冊 provider，handler 直接宣告 `dep: Type` 即可注入。
+- `Annotated[Type, Depends(provider)]` 可作為顯式覆寫（或參數化）的 escape hatch。
+- provider 可以回傳：
+  - 直接的物件 `T`
+  - `contextmanager[T]` / `asynccontextmanager[T]`
+  - 具有 `close()` / `aclose()` 的物件
+- 框架會在每個 request/連線的生命週期邊界使用 `AsyncExitStack` 進行 LIFO 清理，避免錯誤路徑（例外、取消、斷線）漏清。
 
-### 8.2 修訂歷史
+---
 
-| 版本  | 日期 | 描述 | 作者 |
-|-------|------|------|------|
-| 0.0.1 | 2025-05-09 | 初始設計文件草案 | - |
+## 10. Middleware、WebSocket 與 Streaming
+
+- **HTTP Middleware**：`app.add_middleware(middleware)`，middleware 以 `(request, call_next)` 形式包住 handler 執行，並可直接回傳任意 handler 結果型別（最後交由 response renderer 處理）。
+- **WebSocket**：`router.websocket("/ws", handler)`，handler 透過 `WebSocket` 物件使用 `send_text/send_bytes/close` 等 API；路由匹配沿用同一套 radix tree。
+- **Streaming**：支援 `StreamingResponse(AsyncIterable[bytes|str])`（或直接回傳 async iterable），由 ASGI `http.response.body` 多次送出。

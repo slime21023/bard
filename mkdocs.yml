@@ -1,0 +1,54 @@
+site_name: Bard
+theme:
+  name: mkdocs
+extra_css:
+  - stylesheets/just-the-docs.css
+docs_dir: docs
+dev_addr: 127.0.0.1:8001
+exclude_docs: |
+  advanced.md
+  advanced-legacy.md
+  api.md
+  getting-started.md
+  guide.md
+  reference/api.md
+nav:
+  - Home: index.md
+  - Guide:
+    - Routing & Subrouters: concepts/routing.md
+    - Extractors: concepts/extractors.md
+    - Dependencies (DI): concepts/di.md
+    - Middleware: concepts/middleware.md
+    - Responses & Streaming: concepts/responses.md
+    - WebSocket: concepts/websocket.md
+    - Error Handling: howto/errors.md
+    - Testing: howto/testing.md
+  - Advanced:
+    - Overview: advanced/index.md
+    - Routing Details: advanced/routing.md
+    - Conversion Rules: advanced/conversion.md
+    - Memory & Buffering: advanced/memory.md
+    - Lifespan & Resources: advanced/lifespan.md
+    - ASGI Integration: advanced/asgi.md
+    - TestClient & Loops: advanced/testclient.md
+    - Composition: advanced/composition.md
+  - Troubleshooting:
+    - Overview: troubleshooting/index.md
+    - HTTP 400/422/500: troubleshooting/http.md
+    - DI & Providers: troubleshooting/di.md
+    - WebSocket: troubleshooting/websocket.md
+    - Testing: troubleshooting/testing.md
+  - Reference:
+    - Overview: reference/index.md
+    - Public API: reference/public-api.md
+    - App: reference/app.md
+    - Router: reference/router.md
+    - Request: reference/request.md
+    - Extractors: reference/extractors.md
+    - Dependencies (DI): reference/di.md
+    - Middleware: reference/middleware.md
+    - Responses: reference/responses.md
+    - WebSocket: reference/websocket.md
+    - Errors: reference/errors.md
+    - Testing: reference/testing.md
+  - Development: development.md
