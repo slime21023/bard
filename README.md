@@ -4,24 +4,28 @@ Next-gen ASGI framework prototype focused on type-driven handlers, extractors, a
 
 ## Quick Start
 
-Install:
+Install (recommended: `uv`):
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 Run the demo app:
 
 ```bash
-python main.py
+uv run python examples/quickstart.py
 ```
 
 Try it:
 
 ```bash
 curl http://127.0.0.1:8000/
-curl -X POST http://127.0.0.1:8000/echo -H "content-type: application/json" -d "{\"hello\":\"bard\"}"
+curl -X POST http://127.0.0.1:8000/users \
+  -H "content-type: application/json" \
+  -d "{\"username\":\"demo\",\"email\":\"demo@example.com\"}"
 ```
+
+More runnable examples are in `examples/README.md`.
 
 ## Extractors
 
@@ -180,6 +184,12 @@ curl -X POST http://127.0.0.1:8000/upload \
 ## Testing
 
 Use the in-process `TestClient` without running a server. It triggers ASGI lifespan startup/shutdown by default.
+
+Run the test suite:
+
+```bash
+uv run python -m pytest
+```
 
 ```python
 from typing import Annotated
